@@ -17,9 +17,13 @@ logger = logging.getLogger(__name__)
 API_ID = int(os.environ.get("API_ID"))
 API_HASH = os.environ.get("API_HASH")
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
+GDRIVE_FOLDER_ID = os.environ.get("GDRIVE_FOLDER_ID", "")
 
 # Google Drive API scopes
 SCOPES = ['https://www.googleapis.com/auth/drive.file']
+
+# Upload chunk size (5MB)
+UPLOAD_CHUNK_SIZE = 5 * 1024 * 1024
 
 # Initialize Pyrogram client
 app = Client(
@@ -49,6 +53,26 @@ def get_gdrive_service():
     
     return build('drive', 'v3', credentials=creds)
 
+async def download_progress(current, total, status_msg, last_update=None):
+    """Progress callback for download"""
+    if last_update is None:
+        last_update = {'percent': 0}
+    
+    try:
+        progress_percent = int((current / total) * 100)
+        # Update every 10% to avoid hitting rate limits
+        if progress_percent >= last_update['percent'] + 10:
+            speed_mb = current / 1024 / 1024
+            total_mb = total / 1024 / 1024
+            await status_msg.edit_text(
+                f"⏬ Downloading file...\n"
+                f"📊 Progress: {progress_percent}%\n"
+                f"💾 {speed_mb:.1f} MB / {total_mb:.1f} MB"
+            )
+            last_update['percent'] = progress_percent
+    except Exception:
+        pass  # Ignore edit errors due to rate limits
+
 @app.on_message(filters.command("start"))
 async def start_command(client: Client, message: Message):
     await message.reply_text(
@@ -72,25 +96,63 @@ async def help_command(client: Client, message: Message):
 
 @app.on_message(filters.document | filters.video | filters.audio | filters.photo)
 async def handle_file(client: Client, message: Message):
+    status_msg = None
     try:
         # Send status message
         status_msg = await message.reply_text("⏬ Downloading file...")
         
-        # Download file
-        file_path = await message.download()
-        file_name = message.document.file_name if message.document else f"file_{message.id}"
+        # Download file with progress
+        file_path = await message.download(progress=download_progress, progress_args=(status_msg,))
+        
+        # Get filename - prioritize caption, then document name, then video/audio filename
+        if message.caption and message.caption.strip():
+            # Use caption as filename
+            file_name = message.caption.strip()
+            # Add extension if missing
+            if message.video:
+                if not any(file_name.lower().endswith(ext) for ext in ['.mp4', '.mkv', '.avi', '.mov', '.webm', '.flv', '.wmv']):
+                    file_name += '.mkv'  # Default to .mkv for video files
+            elif message.audio:
+                if not any(file_name.lower().endswith(ext) for ext in ['.mp3', '.m4a', '.flac', '.wav', '.aac']):
+                    file_name += '.mp3'
+            elif message.photo:
+                if not any(file_name.lower().endswith(ext) for ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp']):
+                    file_name += '.jpg'
+        elif message.document:
+            file_name = message.document.file_name
+        elif message.video and message.video.file_name:
+            file_name = message.video.file_name
+        else:
+            file_name = f"file_{message.id}"
         
         await status_msg.edit_text("☁️ Uploading to Google Drive...")
         
-        # Upload to Google Drive
+        # Upload to Google Drive with progress
         service = get_gdrive_service()
         file_metadata = {'name': file_name}
-        media = MediaFileUpload(file_path, resumable=True)
+        if GDRIVE_FOLDER_ID:
+            file_metadata['parents'] = [GDRIVE_FOLDER_ID]
+        
+        # Use resumable upload with progress tracking
+        media = MediaFileUpload(file_path, resumable=True, chunksize=UPLOAD_CHUNK_SIZE)
         file = service.files().create(
             body=file_metadata,
             media_body=media,
-            fields='id, webViewLink'
-        ).execute()
+            fields='id,webViewLink',
+            supportsAllDrives=True
+        )
+        
+        # Execute upload with progress tracking
+        response = None
+        last_progress = 0
+        while response is None:
+            status, response = file.next_chunk()
+            if status:
+                progress_percent = int(status.progress() * 100)
+                # Update every 10% to avoid rate limits
+                if progress_percent >= last_progress + 10:
+                    await status_msg.edit_text(f"☁️ Uploading to Google Drive... {progress_percent}%")
+                    last_progress = progress_percent
         
         # Delete local file
         os.remove(file_path)
@@ -98,13 +160,15 @@ async def handle_file(client: Client, message: Message):
         # Send success message
         await status_msg.edit_text(
             f"✅ File uploaded successfully!\n\n"
-            f"📁 File Name: {file_name}\n"
-            f"🔗 Link: {file.get('webViewLink')}"
+            f"📄 File Name: {file_name}\n"
+            f"🔗 Link: {response.get('webViewLink')}"
         )
-        
     except Exception as e:
         logger.error(f"Error: {e}")
-        await message.reply_text(f"❌ Error: {str(e)}")
+        if status_msg:
+            await status_msg.edit_text(f"❌ Error: {str(e)}")
+        else:
+            await message.reply_text(f"❌ Error: {str(e)}")
 
 if __name__ == "__main__":
     logger.info("🚀 Bot starting...")
