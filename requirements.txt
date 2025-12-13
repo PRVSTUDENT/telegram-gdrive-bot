@@ -1,0 +1,6 @@
+pyrogram==2.0.106
+tgcrypto
+google-auth
+google-auth-oauthlib
+google-auth-httplib2
+google-api-python-client
