@@ -22,6 +22,9 @@ GDRIVE_FOLDER_ID = os.environ.get("GDRIVE_FOLDER_ID", "")
 # Google Drive API scopes
 SCOPES = ['https://www.googleapis.com/auth/drive.file']
 
+# Upload chunk size (5MB)
+UPLOAD_CHUNK_SIZE = 5 * 1024 * 1024
+
 # Initialize Pyrogram client
 app = Client(
     "gdrive_bot",
@@ -50,12 +53,15 @@ def get_gdrive_service():
     
     return build('drive', 'v3', credentials=creds)
 
-async def download_progress(current, total, status_msg, last_update=[0]):
+async def download_progress(current, total, status_msg, last_update=None):
     """Progress callback for download"""
+    if last_update is None:
+        last_update = {'percent': 0}
+    
     try:
         progress_percent = int((current / total) * 100)
         # Update every 10% to avoid hitting rate limits
-        if progress_percent >= last_update[0] + 10:
+        if progress_percent >= last_update['percent'] + 10:
             speed_mb = current / 1024 / 1024
             total_mb = total / 1024 / 1024
             await status_msg.edit_text(
@@ -63,7 +69,7 @@ async def download_progress(current, total, status_msg, last_update=[0]):
                 f"📊 Progress: {progress_percent}%\n"
                 f"💾 {speed_mb:.1f} MB / {total_mb:.1f} MB"
             )
-            last_update[0] = progress_percent
+            last_update['percent'] = progress_percent
     except Exception:
         pass  # Ignore edit errors due to rate limits
 
@@ -98,7 +104,7 @@ async def handle_file(client: Client, message: Message):
         # Download file with progress
         file_path = await message.download(progress=download_progress, progress_args=(status_msg,))
         
-        # Get filename - prioritize caption for videos, then document name, then video filename
+        # Get filename - prioritize caption, then document name, then video/audio filename
         if message.caption and message.caption.strip():
             # Use caption as filename
             file_name = message.caption.strip()
@@ -128,7 +134,7 @@ async def handle_file(client: Client, message: Message):
             file_metadata['parents'] = [GDRIVE_FOLDER_ID]
         
         # Use resumable upload with progress tracking
-        media = MediaFileUpload(file_path, resumable=True, chunksize=5*1024*1024)  # 5MB chunks
+        media = MediaFileUpload(file_path, resumable=True, chunksize=UPLOAD_CHUNK_SIZE)
         file = service.files().create(
             body=file_metadata,
             media_body=media,
