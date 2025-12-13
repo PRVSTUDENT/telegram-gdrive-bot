@@ -50,12 +50,12 @@ def get_gdrive_service():
     
     return build('drive', 'v3', credentials=creds)
 
-async def download_progress(current, total, status_msg):
+async def download_progress(current, total, status_msg, last_update=[0]):
     """Progress callback for download"""
     try:
         progress_percent = int((current / total) * 100)
         # Update every 10% to avoid hitting rate limits
-        if progress_percent % 10 == 0:
+        if progress_percent >= last_update[0] + 10:
             speed_mb = current / 1024 / 1024
             total_mb = total / 1024 / 1024
             await status_msg.edit_text(
@@ -63,6 +63,7 @@ async def download_progress(current, total, status_msg):
                 f"📊 Progress: {progress_percent}%\n"
                 f"💾 {speed_mb:.1f} MB / {total_mb:.1f} MB"
             )
+            last_update[0] = progress_percent
     except Exception:
         pass  # Ignore edit errors due to rate limits
 
@@ -89,6 +90,7 @@ async def help_command(client: Client, message: Message):
 
 @app.on_message(filters.document | filters.video | filters.audio | filters.photo)
 async def handle_file(client: Client, message: Message):
+    status_msg = None
     try:
         # Send status message
         status_msg = await message.reply_text("⏬ Downloading file...")
@@ -157,7 +159,10 @@ async def handle_file(client: Client, message: Message):
         )
     except Exception as e:
         logger.error(f"Error: {e}")
-        await status_msg.edit_text(f"❌ Error: {str(e)}")
+        if status_msg:
+            await status_msg.edit_text(f"❌ Error: {str(e)}")
+        else:
+            await message.reply_text(f"❌ Error: {str(e)}")
 
 if __name__ == "__main__":
     logger.info("🚀 Bot starting...")
