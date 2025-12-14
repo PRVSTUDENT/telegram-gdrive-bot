@@ -118,6 +118,10 @@ async def handle_file(client: Client, message: Message):
         # Download file with progress
         file_path = await message.download(progress=download_progress, progress_args=(status_msg,))
         
+        # Clean up download progress tracking
+        if status_msg.id in last_update_time:
+            del last_update_time[status_msg.id]
+        
         # Get filename - prioritize caption, then document name, then video/audio filename
         if message.caption and message.caption.strip():
             # Use caption as filename
