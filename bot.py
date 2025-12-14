@@ -1,5 +1,6 @@
 import os
 import logging
+import time
 from pyrogram import Client, filters
 from pyrogram.types import Message
 from google.oauth2.credentials import Credentials
@@ -24,6 +25,9 @@ SCOPES = ['https://www.googleapis.com/auth/drive.file']
 
 # Upload chunk size (5MB)
 UPLOAD_CHUNK_SIZE = 5 * 1024 * 1024
+
+# Global dictionary to track update times per message
+last_update_time = {}
 
 # Initialize Pyrogram client
 app = Client(
@@ -53,25 +57,35 @@ def get_gdrive_service():
     
     return build('drive', 'v3', credentials=creds)
 
-async def download_progress(current, total, status_msg, last_update=None):
-    """Progress callback for download"""
-    if last_update is None:
-        last_update = {'percent': 0}
-    
+async def download_progress(current, total, status_msg):
+    """Progress callback for download with 30-second flood protection"""
     try:
+        message_id = status_msg.id
+        current_time = time.time()
+        
+        # Get last update time for this message
+        last_time = last_update_time.get(message_id, 0)
+        
+        # Only update if 30 seconds have passed since last update
+        if current_time - last_time < 30:
+            return
+            
         progress_percent = int((current / total) * 100)
-        # Update every 10% to avoid hitting rate limits
-        if progress_percent >= last_update['percent'] + 10:
-            speed_mb = current / 1024 / 1024
-            total_mb = total / 1024 / 1024
-            await status_msg.edit_text(
-                f"⏬ Downloading file...\n"
-                f"📊 Progress: {progress_percent}%\n"
-                f"💾 {speed_mb:.1f} MB / {total_mb:.1f} MB"
-            )
-            last_update['percent'] = progress_percent
+        speed_mb = current / 1024 / 1024
+        total_mb = total / 1024 / 1024
+        
+        await status_msg.edit_text(
+            f"⏬ Downloading file...\n"
+            f"📊 Progress: {progress_percent}%\n"
+            f"💾 {speed_mb:.1f} MB / {total_mb:.1f} MB"
+        )
+        
+        # Update last update time
+        last_update_time[message_id] = current_time
+        
     except Exception:
-        pass  # Ignore edit errors due to rate limits
+        # Silently ignore all errors including FloodWait
+        pass
 
 @app.on_message(filters.command("start"))
 async def start_command(client: Client, message: Message):
@@ -103,6 +117,10 @@ async def handle_file(client: Client, message: Message):
         
         # Download file with progress
         file_path = await message.download(progress=download_progress, progress_args=(status_msg,))
+        
+        # Clean up download progress tracking
+        if status_msg.id in last_update_time:
+            del last_update_time[status_msg.id]
         
         # Get filename - prioritize caption, then document name, then video/audio filename
         if message.caption and message.caption.strip():
@@ -145,14 +163,18 @@ async def handle_file(client: Client, message: Message):
         # Execute upload with progress tracking
         response = None
         last_progress = 0
+        last_upload_time = 0
         while response is None:
             status, response = file.next_chunk()
             if status:
                 progress_percent = int(status.progress() * 100)
-                # Update every 10% to avoid rate limits
-                if progress_percent >= last_progress + 10:
+                current_time = time.time()
+                
+                # Update when both 10% progress AND 30 seconds have passed
+                if (progress_percent >= last_progress + 10) and (current_time - last_upload_time >= 30):
                     await status_msg.edit_text(f"☁️ Uploading to Google Drive... {progress_percent}%")
                     last_progress = progress_percent
+                    last_upload_time = current_time
         
         # Delete local file
         os.remove(file_path)
