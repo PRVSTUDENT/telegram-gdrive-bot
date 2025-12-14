@@ -83,7 +83,7 @@ async def download_progress(current, total, status_msg):
         # Update last update time
         last_update_time[message_id] = current_time
         
-    except Exception as e:
+    except Exception:
         # Silently ignore all errors including FloodWait
         pass
 
@@ -170,7 +170,7 @@ async def handle_file(client: Client, message: Message):
                 progress_percent = int(status.progress() * 100)
                 current_time = time.time()
                 
-                # Update every 30 seconds or at 10% intervals
+                # Update when both 10% progress AND 30 seconds have passed
                 if (progress_percent >= last_progress + 10) and (current_time - last_upload_time >= 30):
                     await status_msg.edit_text(f"☁️ Uploading to Google Drive... {progress_percent}%")
                     last_progress = progress_percent
