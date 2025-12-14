@@ -4,6 +4,8 @@ import time
 from pyrogram import Client, filters
 from pyrogram.types import Message
 from google.oauth2.credentials import Credentials
+import json
+from google.oauth2 import service_account
 from google.auth.transport.requests import Request
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
@@ -38,22 +40,30 @@ app = Client(
 )
 
 def get_gdrive_service():
-    """Get Google Drive service instance"""
-    creds = None
-    if os.path.exists('token.pickle'):
-        with open('token.pickle', 'rb') as token:
-            creds = pickle.load(token)
+    """Get Google Drive service instance using Service Account"""
+    # Check for Service Account JSON in environment variable
+    service_account_json = os.environ.get('GDRIVE_SERVICE_ACCOUNT_JSON')
     
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file(
-                'credentials.json', SCOPES)
-            creds = flow.run_local_server(port=0)
-        
-        with open('token.pickle', 'wb') as token:
-            pickle.dump(creds, token)
+    if not service_account_json:
+        if not os.path.exists('credentials.json'):
+            raise FileNotFoundError(
+                "Error: Missing Google credentials! Set GDRIVE_SERVICE_ACCOUNT_JSON env var or provide credentials.json"
+            )
+        # Fallback to credentials.json if it exists
+        with open('credentials.json', 'r') as f:
+            service_account_json = f.read()
+    
+    # Parse the Service Account JSON
+    try:
+        service_account_info = json.loads(service_account_json)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid JSON in GDRIVE_SERVICE_ACCOUNT_JSON: {e}")
+    
+    # Create credentials from service account info
+    creds = service_account.Credentials.from_service_account_info(
+        service_account_info,
+        scopes=SCOPES
+    )
     
     return build('drive', 'v3', credentials=creds)
 
