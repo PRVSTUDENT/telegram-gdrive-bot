@@ -71,12 +71,14 @@ async def safe_edit_message(message, text):
     """Safely edit message, ignoring MESSAGE_NOT_MODIFIED errors"""
     try:
         await message.edit_text(text)
+        logger.debug(f"Message edited successfully")
     except Exception as e:
-        # Ignore MESSAGE_NOT_MODIFIED and other harmless errors
-        if "message is not modified" in str(e).lower() or "400" in str(e):
-            pass
+        error_msg = str(e).lower()
+        # Ignore MESSAGE_NOT_MODIFIED errors
+        if "message is not modified" in error_msg or "400" in error_msg:
+            logger.debug(f"Message not modified (expected): {e}")
         else:
-            logger.error(f"Edit message error: {e}")
+            logger.warning(f"Failed to edit message: {type(e).__name__}: {e}")
 
 async def download_progress(current, total, status_msg):
     """Progress callback for download with 30-second flood protection"""
@@ -96,9 +98,9 @@ async def download_progress(current, total, status_msg):
         total_mb = total / 1024 / 1024
         
         new_text = (
-            f"⏬ Downloading file...\n"
-            f"📊 Progress: {progress_percent}%\n"
-            f"💾 {speed_mb:.1f} MB / {total_mb:.1f} MB"
+            f"\u23ec Downloading file...\n"
+            f"\ud83d\udcca Progress: {progress_percent}%\n"
+            f"\ud83d\udcbe {speed_mb:.1f} MB / {total_mb:.1f} MB"
         )
         await safe_edit_message(status_msg, new_text)
         
@@ -112,8 +114,8 @@ async def download_progress(current, total, status_msg):
 @app.on_message(filters.command("start"))
 async def start_command(client: Client, message: Message):
     await message.reply_text(
-        "👋 Hello! I'm a Google Drive Upload Bot.\n\n"
-        "📎 Send me any file and I'll upload it to your Google Drive!\n\n"
+        "\ud83d\udc4b Hello! I'm a Google Drive Upload Bot.\n\n"
+        "\ud83d\udcce Send me any file and I'll upload it to your Google Drive!\n\n"
         "Commands:\n"
         "/start - Show this message\n"
         "/help - Get help"
@@ -122,12 +124,12 @@ async def start_command(client: Client, message: Message):
 @app.on_message(filters.command("help"))
 async def help_command(client: Client, message: Message):
     await message.reply_text(
-        "📚 How to use:\n\n"
+        "\ud83d\udcda How to use:\n\n"
         "1. Send me any document/file\n"
         "2. I'll download it temporarily\n"
         "3. Upload it to your Google Drive\n"
         "4. Send you the link\n\n"
-        "✨ Simple as that!"
+        "\u2728 Simple as that!"
     )
 
 @app.on_message(filters.document | filters.video | filters.audio | filters.photo)
@@ -135,7 +137,7 @@ async def handle_file(client: Client, message: Message):
     status_msg = None
     try:
         # Send status message
-        status_msg = await message.reply_text("⏬ Downloading file...")
+        status_msg = await message.reply_text("\u23ec Downloading file...")
         
         # Download file with progress
         file_path = await message.download(progress=download_progress, progress_args=(status_msg,))
@@ -165,7 +167,7 @@ async def handle_file(client: Client, message: Message):
         else:
             file_name = f"file_{message.id}"
         
-        await safe_edit_message(status_msg, "☁️ Uploading to Google Drive...")
+        await safe_edit_message(status_msg, "\u2601\ufe0f Uploading to Google Drive...")
         
         # Upload to Google Drive with progress
         service = get_gdrive_service()
@@ -194,7 +196,7 @@ async def handle_file(client: Client, message: Message):
                 
                 # Update when both 10% progress AND 30 seconds have passed
                 if (progress_percent >= last_progress + 10) and (current_time - last_upload_time >= 30):
-                    new_text = f"☁️ Uploading to Google Drive... {progress_percent}%"
+                    new_text = f"\u2601\ufe0f Uploading to Google Drive... {progress_percent}%"
                     await safe_edit_message(status_msg, new_text)
                     last_progress = progress_percent
                     last_upload_time = current_time
@@ -204,19 +206,33 @@ async def handle_file(client: Client, message: Message):
         
         # Send success message
         success_text = (
-            f"✅ File uploaded successfully!\n\n"
-            f"📄 File Name: {file_name}\n"
-            f"🔗 Link: {response.get('webViewLink')}"
+            f"\u2705 File uploaded successfully!\n\n"
+            f"\ud83d\udcc4 File Name: {file_name}\n"
+            f"\ud83d\udd17 Link: {response.get('webViewLink')}"
         )
         await safe_edit_message(status_msg, success_text)
         
     except Exception as e:
-        logger.error(f"Error: {e}")
+        error_details = f"{type(e).__name__}: {str(e)}"
+        logger.error(f"Error during file handling: {error_details}")
+        
         if status_msg:
-            await safe_edit_message(status_msg, f"❌ Error: {str(e)}")
+            error_text = f"\u274c Error: {error_details}"
+            try:
+                await safe_edit_message(status_msg, error_text)
+            except Exception as edit_error:
+                logger.error(f"Failed to send error message: {edit_error}")
+                try:
+                    await message.reply_text(error_text)
+                except Exception as reply_error:
+                    logger.error(f"Failed to reply with error: {reply_error}")
         else:
-            await message.reply_text(f"❌ Error: {str(e)}")
+            error_text = f"\u274c Error: {error_details}"
+            try:
+                await message.reply_text(error_text)
+            except Exception as reply_error:
+                logger.error(f"Failed to reply with error: {reply_error}")
 
 if __name__ == "__main__":
-    logger.info("🚀 Bot starting...")
+    logger.info("\ud83d\ude80 Bot starting...")
     app.run()
