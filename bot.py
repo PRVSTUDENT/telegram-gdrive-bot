@@ -9,7 +9,7 @@ from google.oauth2 import service_account
 from google.auth.transport.requests import Request
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
+from googleapiclient.http import MediaFileUpload, HttpError
 import pickle
 
 # Configure logging
@@ -170,48 +170,76 @@ async def handle_file(client: Client, message: Message):
         await safe_edit_message(status_msg, "\u2601\ufe0f Uploading to Google Drive...")
         
         # Upload to Google Drive with progress
-        service = get_gdrive_service()
-        file_metadata = {'name': file_name}
-        if GDRIVE_FOLDER_ID:
-            file_metadata['parents'] = [GDRIVE_FOLDER_ID]
-        
-        # Use resumable upload with progress tracking
-        media = MediaFileUpload(file_path, resumable=True, chunksize=UPLOAD_CHUNK_SIZE)
-        file = service.files().create(
-            body=file_metadata,
-            media_body=media,
-            fields='id,webViewLink',
-            supportsAllDrives=True
-        )
-        
-        # Execute upload with progress tracking
-        response = None
-        last_progress = 0
-        last_upload_time = 0
-        while response is None:
-            status, response = file.next_chunk()
-            if status:
-                progress_percent = int(status.progress() * 100)
-                current_time = time.time()
-                
-                # Update when both 10% progress AND 30 seconds have passed
-                if (progress_percent >= last_progress + 10) and (current_time - last_upload_time >= 30):
-                    new_text = f"\u2601\ufe0f Uploading to Google Drive... {progress_percent}%"
-                    await safe_edit_message(status_msg, new_text)
-                    last_progress = progress_percent
-                    last_upload_time = current_time
-        
-        # Delete local file
-        os.remove(file_path)
-        
-        # Send success message
-        success_text = (
-            f"\u2705 File uploaded successfully!\n\n"
-            f"\ud83d\udcc4 File Name: {file_name}\n"
-            f"\ud83d\udd17 Link: {response.get('webViewLink')}"
-        )
-        await safe_edit_message(status_msg, success_text)
-        
+        try:
+            service = get_gdrive_service()
+            file_metadata = {'name': file_name}
+            if GDRIVE_FOLDER_ID:
+                file_metadata['parents'] = [GDRIVE_FOLDER_ID]
+            
+            # Use resumable upload with progress tracking
+            media = MediaFileUpload(file_path, resumable=True, chunksize=UPLOAD_CHUNK_SIZE)
+            file = service.files().create(
+                body=file_metadata,
+                media_body=media,
+                fields='id,webViewLink',
+                supportsAllDrives=True
+            )
+            
+            # Execute upload with progress tracking
+            response = None
+            last_progress = 0
+            last_upload_time = 0
+            while response is None:
+                status, response = file.next_chunk()
+                if status:
+                    progress_percent = int(status.progress() * 100)
+                    current_time = time.time()
+                    
+                    # Update when both 10% progress AND 30 seconds have passed
+                    if (progress_percent >= last_progress + 10) and (current_time - last_upload_time >= 30):
+                        new_text = f"\u2601\ufe0f Uploading to Google Drive... {progress_percent}%"
+                        await safe_edit_message(status_msg, new_text)
+                        last_progress = progress_percent
+                        last_upload_time = current_time
+            
+            # Delete local file
+            os.remove(file_path)
+            
+            # Send success message
+            success_text = (
+                f"\u2705 File uploaded successfully!\n\n"
+                f"\ud83d\udcc4 File Name: {file_name}\n"
+                f"\ud83d\udd17 Link: {response.get('webViewLink')}"
+            )
+            await safe_edit_message(status_msg, success_text)
+            
+        except HttpError as http_err:
+            # Handle Google Drive API errors specifically
+            status_code = http_err.resp.status
+            error_content = http_err.content.decode('utf-8') if isinstance(http_err.content, bytes) else str(http_err.content)
+            
+            # Parse error message
+            if status_code == 403:
+                error_msg = "Permission denied. Check if the service account has access to the Google Drive folder."
+            elif status_code == 404:
+                error_msg = f"Google Drive folder not found. Check folder ID: {GDRIVE_FOLDER_ID}"
+            elif status_code == 400:
+                error_msg = f"Invalid request to Google Drive. Check folder ID format."
+            else:
+                error_msg = f"Google Drive API error (HTTP {status_code})"
+            
+            error_text = f"\u274c Error: {error_msg}"
+            logger.error(f"Google Drive HTTP Error {status_code}: {error_content}")
+            
+            try:
+                await safe_edit_message(status_msg, error_text)
+            except Exception as edit_error:
+                logger.error(f"Failed to send error message: {edit_error}")
+                try:
+                    await message.reply_text(error_text)
+                except Exception as reply_error:
+                    logger.error(f"Failed to reply with error: {reply_error}")
+                    
     except Exception as e:
         error_details = f"{type(e).__name__}: {str(e)}"
         logger.error(f"Error during file handling: {error_details}")
