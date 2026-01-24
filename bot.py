@@ -67,6 +67,17 @@ def get_gdrive_service():
     
     return build('drive', 'v3', credentials=creds)
 
+async def safe_edit_message(message, text):
+    """Safely edit message, ignoring MESSAGE_NOT_MODIFIED errors"""
+    try:
+        await message.edit_text(text)
+    except Exception as e:
+        # Ignore MESSAGE_NOT_MODIFIED and other harmless errors
+        if "message is not modified" in str(e).lower() or "400" in str(e):
+            pass
+        else:
+            logger.error(f"Edit message error: {e}")
+
 async def download_progress(current, total, status_msg):
     """Progress callback for download with 30-second flood protection"""
     try:
@@ -79,16 +90,17 @@ async def download_progress(current, total, status_msg):
         # Only update if 30 seconds have passed since last update
         if current_time - last_time < 30:
             return
-            
+        
         progress_percent = int((current / total) * 100)
         speed_mb = current / 1024 / 1024
         total_mb = total / 1024 / 1024
         
-        await status_msg.edit_text(
+        new_text = (
             f"⏬ Downloading file...\n"
             f"📊 Progress: {progress_percent}%\n"
             f"💾 {speed_mb:.1f} MB / {total_mb:.1f} MB"
         )
+        await safe_edit_message(status_msg, new_text)
         
         # Update last update time
         last_update_time[message_id] = current_time
@@ -153,7 +165,7 @@ async def handle_file(client: Client, message: Message):
         else:
             file_name = f"file_{message.id}"
         
-        await status_msg.edit_text("☁️ Uploading to Google Drive...")
+        await safe_edit_message(status_msg, "☁️ Uploading to Google Drive...")
         
         # Upload to Google Drive with progress
         service = get_gdrive_service()
@@ -182,7 +194,8 @@ async def handle_file(client: Client, message: Message):
                 
                 # Update when both 10% progress AND 30 seconds have passed
                 if (progress_percent >= last_progress + 10) and (current_time - last_upload_time >= 30):
-                    await status_msg.edit_text(f"☁️ Uploading to Google Drive... {progress_percent}%")
+                    new_text = f"☁️ Uploading to Google Drive... {progress_percent}%"
+                    await safe_edit_message(status_msg, new_text)
                     last_progress = progress_percent
                     last_upload_time = current_time
         
@@ -190,15 +203,17 @@ async def handle_file(client: Client, message: Message):
         os.remove(file_path)
         
         # Send success message
-        await status_msg.edit_text(
+        success_text = (
             f"✅ File uploaded successfully!\n\n"
             f"📄 File Name: {file_name}\n"
             f"🔗 Link: {response.get('webViewLink')}"
         )
+        await safe_edit_message(status_msg, success_text)
+        
     except Exception as e:
         logger.error(f"Error: {e}")
         if status_msg:
-            await status_msg.edit_text(f"❌ Error: {str(e)}")
+            await safe_edit_message(status_msg, f"❌ Error: {str(e)}")
         else:
             await message.reply_text(f"❌ Error: {str(e)}")
 
